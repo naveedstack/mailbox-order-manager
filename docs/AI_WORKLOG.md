@@ -96,10 +96,6 @@ Hard cap (4h): 24:00 PKT
 - **What it did:** It gave README, ARCHITECTURE, the worklog, the clean-clone test and the video 25 minutes in total, and treated every test on the list as required.
 - **Fix:** Rebalanced the phases so docs and video get 45 minutes, split the tests into MUST and STRETCH, and wrote down a cut order. The revised schedule still ran 10 minutes over. Claude Code caught that on the second review, and I trimmed it.
 
-### 4. <fill in during implementation>
-- **What it did:**
-- **How I caught it:**
-- **Fix:**
 
 ## Where Claude improved my design
 - P2002 re-read after rollback: a unique violation aborts the Postgres transaction, so the lookup of the existing order has to run after the rollback. That lookup lives in the repository, so services never see Prisma error codes.
@@ -132,8 +128,6 @@ Hard cap (4h): 24:00 PKT
 | 3 Auth + admin | 22:30–23:05 (35m) |
 | 4 Customer views | 23:05–23:15 (10m) | 22:07 |
 | 6 Docs + video | 23:08–23:53 (45m) | | | |
-| Buffer | 23:53–24:00 (7m) | | | |
-| **Total** | **4h 00m** | | | |
 
 ## Unfinished / would do next
 -
