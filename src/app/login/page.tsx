@@ -1,17 +1,38 @@
 import { safeNextPath } from "@/lib/safe-next-path";
 import { LoginForm } from "./login-form";
 
+const SEEDED_ACCOUNTS = [
+  { email: "admin@example.com", password: "Admin123!", role: "Admin" },
+  { email: "alice@example.com", password: "Customer123!", role: "Customer" },
+  { email: "bob@example.com", password: "Customer123!", role: "Customer" },
+];
+
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const { next } = await searchParams;
   return (
-    <div className="mx-auto mt-16 w-full max-w-sm rounded-xl border bg-card p-6 shadow-sm">
-      <h1 className="mb-1 text-xl font-semibold">Sign in</h1>
-      <p className="mb-6 text-sm text-muted-foreground">Mailbox Order Manager</p>
-      <LoginForm next={safeNextPath(Array.isArray(next) ? next[0] : next)} />
+    <div className="mx-auto flex w-full max-w-sm flex-col gap-8 pt-8 sm:pt-16">
+      <div className="flex flex-col gap-2">
+        <h1 className="type-display text-4xl font-semibold text-primary">Mailbox Orders</h1>
+        <p className="text-muted-foreground">Sign in to order mailboxes and follow their provisioning.</p>
+      </div>
+      <div className="rounded-lg border bg-surface p-6">
+        <LoginForm next={safeNextPath(Array.isArray(next) ? next[0] : next)} />
+      </div>
       {process.env.NODE_ENV !== "production" && (
-        <p className="mt-6 text-xs text-muted-foreground">
-          Seeded accounts: admin@example.com / Admin123! · alice@example.com / Customer123!
-        </p>
+        <div className="text-sm text-muted-foreground">
+          <p className="mb-2">Seeded accounts for local development:</p>
+          <table className="w-full">
+            <tbody>
+              {SEEDED_ACCOUNTS.map((account) => (
+                <tr key={account.email}>
+                  <td className="py-0.5 pr-3">{account.role}</td>
+                  <td className="py-0.5 pr-3 font-mono text-xs">{account.email}</td>
+                  <td className="py-0.5 font-mono text-xs">{account.password}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

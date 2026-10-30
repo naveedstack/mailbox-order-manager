@@ -19,10 +19,14 @@ export default async function setup(): Promise<void> {
     const { rowCount } = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [
       dbName,
     ]);
+    // Identifiers can't be parameterized; quote it.
+    const quoted = `"${dbName.replace(/"/g, '""')}"`;
     if (!rowCount) {
-      // Identifiers can't be parameterized; quote it.
-      await client.query(`CREATE DATABASE "${dbName.replace(/"/g, '""')}"`);
+      await client.query(`CREATE DATABASE ${quoted}`);
     }
+    // Run tests in a non-UTC zone. Docker's Postgres defaults to UTC, which
+    // hides bugs where SQL writes local time next to Prisma's UTC values.
+    await client.query(`ALTER DATABASE ${quoted} SET timezone TO 'Asia/Karachi'`);
   } finally {
     await client.end();
   }

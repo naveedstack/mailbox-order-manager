@@ -5,7 +5,15 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export function RetryButton({ orderId }: { orderId: string }) {
+export function RetryButton({
+  orderId,
+  label = "Retry",
+  size = "sm",
+}: {
+  orderId: string;
+  label?: string;
+  size?: "sm" | "default";
+}) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,10 +33,14 @@ export function RetryButton({ orderId }: { orderId: string }) {
 
   return (
     <span className="inline-flex items-center gap-2">
-      <Button size="sm" variant="outline" onClick={retry} disabled={pending}>
-        {pending ? "Retrying…" : "Retry"}
+      <Button size={size} variant="outline" onClick={retry} disabled={pending}>
+        {pending ? "Retrying…" : label}
       </Button>
-      {error && <span className="text-xs text-destructive">{error}</span>}
+      {error && (
+        <span role="alert" className="text-xs text-destructive">
+          {error}
+        </span>
+      )}
     </span>
   );
 }

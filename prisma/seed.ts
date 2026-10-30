@@ -11,8 +11,10 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { mailboxAddresses } from "@/domain/mailbox";
+import { failedSummary, mailboxAddresses, provisionedSummary } from "@/domain/mailbox";
 import type { ActorType, OrderStatus, Provider, Role } from "@/generated/prisma/client";
+import { googleExternalId, googleFailureMessage } from "@/providers/mock-google-provider";
+import { microsoftExternalId, microsoftFailureMessage } from "@/providers/mock-microsoft-provider";
 import { prisma } from "@/server/db";
 
 const USERS: { email: string; name: string; role: Role; password: string }[] = [
@@ -48,11 +50,12 @@ const ORDERS: SeedOrder[] = [
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
-const SIMULATED_FAILURE = "Provider error: mailbox creation rejected (simulated)";
 
-function externalId(provider: Provider): string {
-  return `${provider === "GOOGLE" ? "google" : "msft"}-${randomUUID()}`;
-}
+// Same id and error formats the mock providers produce at runtime.
+const MOCK_OUTPUT: Record<Provider, { externalId: () => string; failure: (address: string) => string }> = {
+  GOOGLE: { externalId: googleExternalId, failure: googleFailureMessage },
+  MICROSOFT: { externalId: microsoftExternalId, failure: microsoftFailureMessage },
+};
 
 async function seedUsers(): Promise<Map<string, string>> {
   const ids = new Map<string, string>();
@@ -74,18 +77,19 @@ async function seedOrder(order: SeedOrder, customerId: string, now: number): Pro
   const finishedAt = new Date(createdAt.getTime() + 2 * MINUTE);
   const processed = order.status !== "PENDING";
   const failed = order.status === "FAILED" ? (order.failedMailboxes ?? 1) : 0;
-  const reason = failed > 0 ? `${failed} of ${order.mailboxCount} mailboxes failed` : null;
+  const reason = failed > 0 ? failedSummary(failed, order.mailboxCount) : null;
 
   // The last `failed` mailboxes failed; the rest follow the order's outcome.
   const addresses = mailboxAddresses(order.domain, order.mailboxCount);
+  const mock = MOCK_OUTPUT[order.provider];
   const mailboxes = addresses.map((address, i) => {
     const isFailed = i >= addresses.length - failed;
     if (!processed) {
       return { address, status: "PENDING" as const, attempts: 0, updatedAt: createdAt };
     }
     return isFailed
-      ? { address, status: "FAILED" as const, lastError: SIMULATED_FAILURE, attempts: 1, updatedAt: finishedAt }
-      : { address, status: "ACTIVE" as const, externalId: externalId(order.provider), attempts: 1, updatedAt: finishedAt };
+      ? { address, status: "FAILED" as const, lastError: mock.failure(address), attempts: 1, updatedAt: finishedAt }
+      : { address, status: "ACTIVE" as const, externalId: mock.externalId(), attempts: 1, updatedAt: finishedAt };
   });
 
   type AuditRow = {
@@ -106,7 +110,7 @@ async function seedOrder(order: SeedOrder, customerId: string, now: number): Pro
         fromStatus: "PROVISIONING",
         toStatus: order.status,
         actorType: "SYSTEM",
-        reason: reason ?? "All mailboxes provisioned",
+        reason: reason ?? provisionedSummary(order.mailboxCount),
         createdAt: finishedAt,
       },
     );

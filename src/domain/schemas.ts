@@ -6,6 +6,8 @@ import { ORDER_STATUSES, PROVIDERS } from "./types";
 // Two or more DNS labels and an alphabetic TLD; no scheme, path or spaces.
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
+const MAILBOX_COUNT_MESSAGE = "Enter a whole number from 1 to 50";
+
 export const createOrderInput = z.object({
   domain: z
     .string()
@@ -15,7 +17,12 @@ export const createOrderInput = z.object({
     .regex(HOSTNAME, "Enter a domain like example.com"),
   // TASK.md speaks of `google` / `microsoft`; accept any casing.
   provider: z.string().trim().toUpperCase().pipe(z.enum(PROVIDERS)),
-  mailboxCount: z.number().int().min(1).max(50),
+  // One message for every way the count can be wrong (shown in the form and API).
+  mailboxCount: z
+    .number({ error: MAILBOX_COUNT_MESSAGE })
+    .int({ error: MAILBOX_COUNT_MESSAGE })
+    .min(1, { error: MAILBOX_COUNT_MESSAGE })
+    .max(50, { error: MAILBOX_COUNT_MESSAGE }),
   idempotencyKey: z.uuid(),
 });
 

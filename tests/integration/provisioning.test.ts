@@ -153,7 +153,7 @@ describe("ProvisioningService.processNext", () => {
 
     expect(google.calls).toEqual([]);
     const order = await prisma.order.findUniqueOrThrow({ where: { id } });
-    expect(order).toMatchObject({ status: "FAILED", lastError: "1 of 1 mailboxes failed" });
+    expect(order).toMatchObject({ status: "FAILED", lastError: "1 of 1 mailbox failed" });
   });
 
   it("on an unexpected error, fails the order with a generic message and logs the cause", async () => {

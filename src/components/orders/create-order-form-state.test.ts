@@ -23,7 +23,9 @@ describe("parseCreateOrderForm", () => {
     const result = parseCreateOrderForm(form({ ...valid, mailboxCount }), KEY);
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.fieldErrors.mailboxCount?.length).toBeGreaterThan(0);
+    expect(!result.ok && result.fieldErrors.mailboxCount).toEqual([
+      "Enter a whole number from 1 to 50",
+    ]);
   });
 
   it("reports an invalid domain as a field error", () => {

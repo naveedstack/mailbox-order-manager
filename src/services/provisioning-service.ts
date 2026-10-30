@@ -1,7 +1,12 @@
 // One unit of worker work: claim the next PENDING order, provision its
 // non-ACTIVE mailboxes through the order's provider, then move the order to
 // ACTIVE or FAILED. No Prisma, no HTTP; repositories and providers are injected.
-import type { Mailbox } from "@/domain/mailbox";
+import {
+  failedSummary,
+  mailboxCountLabel,
+  provisionedSummary,
+  type Mailbox,
+} from "@/domain/mailbox";
 import type { Order } from "@/domain/order";
 import type { Actor } from "@/domain/types";
 import { mapWithConcurrency } from "@/lib/concurrency";
@@ -64,7 +69,7 @@ export function createProvisioningService(deps: {
       const order = await orders.claimNextPending();
       if (!order) return "idle";
       logger.info(
-        `claimed order ${order.id} (${order.provider}, ${order.mailboxCount} mailboxes, attempt ${order.attempts})`,
+        `claimed order ${order.id} (${order.provider}, ${mailboxCountLabel(order.mailboxCount)}, attempt ${order.attempts})`,
       );
 
       try {
@@ -79,12 +84,12 @@ export function createProvisioningService(deps: {
         const counts = await mailboxes.countByStatus(order.id);
         if (counts.ACTIVE === order.mailboxCount) {
           await orderService.transition(order.id, "ACTIVE", SYSTEM, {
-            reason: `All ${order.mailboxCount} mailboxes provisioned`,
+            reason: provisionedSummary(order.mailboxCount),
             effects: { lastError: null },
           });
           logger.info(`order ${order.id} -> ACTIVE`);
         } else {
-          const summary = `${order.mailboxCount - counts.ACTIVE} of ${order.mailboxCount} mailboxes failed`;
+          const summary = failedSummary(order.mailboxCount - counts.ACTIVE, order.mailboxCount);
           await orderService.transition(order.id, "FAILED", SYSTEM, {
             reason: summary,
             effects: { lastError: summary },

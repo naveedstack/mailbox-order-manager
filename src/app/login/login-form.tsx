@@ -33,18 +33,18 @@ export function LoginForm({ next }: { next: string }) {
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         Email
-        <Input name="email" type="email" autoComplete="username" required />
+        <Input name="email" type="email" autoComplete="username" required className="h-10" />
       </label>
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         Password
-        <Input name="password" type="password" autoComplete="current-password" required />
+        <Input name="password" type="password" autoComplete="current-password" required className="h-10" />
       </label>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       )}
-      <Button type="submit" size="lg" disabled={pending}>
+      <Button type="submit" size="lg" className="h-10" disabled={pending}>
         {pending ? "Signing in…" : "Sign in"}
       </Button>
     </form>

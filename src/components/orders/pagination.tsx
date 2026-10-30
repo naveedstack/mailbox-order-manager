@@ -4,7 +4,7 @@ import type { ListOrdersQuery } from "@/domain/schemas";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-function pageHref(basePath: string, query: ListOrdersQuery, page: number): string {
+export function pageHref(basePath: string, query: ListOrdersQuery, page: number): string {
   const params = new URLSearchParams();
   if (query.status) params.set("status", query.status);
   if (query.provider) params.set("provider", query.provider);
@@ -20,31 +20,40 @@ export function Pagination({
 }: {
   basePath: string;
   query: ListOrdersQuery;
-  page: Pick<OrderPage, "page" | "pageCount" | "total">;
+  page: Pick<OrderPage, "page" | "pageCount" | "total" | "pageSize">;
 }) {
+  if (page.total === 0) return null;
+  const from = (page.page - 1) * page.pageSize + 1;
+  const to = Math.min(page.page * page.pageSize, page.total);
+  const noun = page.total === 1 ? "order" : "orders";
   const linkClass = buttonVariants({ variant: "outline", size: "sm" });
-  const disabled = "pointer-events-none opacity-50";
+  const disabled = "pointer-events-none opacity-40";
+
   return (
     <nav className="flex items-center justify-between gap-4 text-sm text-muted-foreground" aria-label="Pagination">
-      <span>
-        Page {page.page} of {page.pageCount} · {page.total} {page.total === 1 ? "order" : "orders"}
+      <span className="tabular-nums">
+        {page.pageCount > 1 ? `${from}–${to} of ${page.total} ${noun}` : `${page.total} ${noun}`}
       </span>
-      <span className="flex gap-2">
-        <Link
-          href={pageHref(basePath, query, page.page - 1)}
-          className={cn(linkClass, page.page <= 1 && disabled)}
-          aria-disabled={page.page <= 1}
-        >
-          Previous
-        </Link>
-        <Link
-          href={pageHref(basePath, query, page.page + 1)}
-          className={cn(linkClass, page.page >= page.pageCount && disabled)}
-          aria-disabled={page.page >= page.pageCount}
-        >
-          Next
-        </Link>
-      </span>
+      {page.pageCount > 1 && (
+        <span className="flex gap-2">
+          <Link
+            href={pageHref(basePath, query, page.page - 1)}
+            className={cn(linkClass, page.page <= 1 && disabled)}
+            aria-disabled={page.page <= 1}
+            tabIndex={page.page <= 1 ? -1 : undefined}
+          >
+            Previous
+          </Link>
+          <Link
+            href={pageHref(basePath, query, page.page + 1)}
+            className={cn(linkClass, page.page >= page.pageCount && disabled)}
+            aria-disabled={page.page >= page.pageCount}
+            tabIndex={page.page >= page.pageCount ? -1 : undefined}
+          >
+            Next
+          </Link>
+        </span>
+      )}
     </nav>
   );
 }

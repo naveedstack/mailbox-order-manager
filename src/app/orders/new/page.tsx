@@ -8,11 +8,12 @@ export default async function NewOrderPage() {
   if (user.role !== "CUSTOMER") redirect("/admin/orders");
 
   return (
-    <div className="flex max-w-lg flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">New order</h1>
-        <p className="text-sm text-muted-foreground">
-          Mailboxes are created as mailbox-01@your-domain, mailbox-02@your-domain, …
+    <div className="flex flex-col gap-8">
+      <div className="flex max-w-xl flex-col gap-2">
+        <h1 className="type-display text-4xl font-semibold">New order</h1>
+        <p className="text-muted-foreground">
+          Choose a domain, a provider and how many mailboxes you need. You can follow provisioning on
+          the order page.
         </p>
       </div>
       <CreateOrderForm />

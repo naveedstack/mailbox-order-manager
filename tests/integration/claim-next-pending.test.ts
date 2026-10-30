@@ -61,6 +61,23 @@ describe("OrderRepository.claimNextPending", () => {
     expect(claimed?.createdAt).toBeInstanceOf(Date);
   });
 
+  // The test database runs in a non-UTC zone (see global-setup), so SQL that
+  // writes local time instead of UTC is off by hours here.
+  it("stamps the claim and its audit row with the current time", async () => {
+    const { id } = await insertOrder({ customerId, status: "PENDING" });
+    const before = Date.now();
+
+    const claimed = await orderRepository.claimNextPending();
+
+    const after = Date.now();
+    const audit = await prisma.orderAuditLog.findFirstOrThrow({ where: { orderId: id } });
+    for (const stamp of [claimed!.claimedAt!, claimed!.updatedAt, audit.createdAt]) {
+      // 1s slack for clock differences between Node and Postgres.
+      expect(stamp.getTime()).toBeGreaterThanOrEqual(before - 1_000);
+      expect(stamp.getTime()).toBeLessThanOrEqual(after + 1_000);
+    }
+  });
+
   it("only claims PENDING orders", async () => {
     for (const status of ["PROVISIONING", "ACTIVE", "FAILED"] as const) {
       await insertOrder({ customerId, status });

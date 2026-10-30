@@ -7,6 +7,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
+import { mailboxAddresses } from "@/domain/mailbox";
+import { RackPreview } from "@/components/orders/mailbox-rack";
 import {
   describeApiError,
   parseCreateOrderForm,
@@ -14,6 +16,20 @@ import {
 } from "@/components/orders/create-order-form-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+
+const PROVIDER_OPTIONS = [
+  { value: "google", label: "Google Workspace" },
+  { value: "microsoft", label: "Microsoft 365" },
+] as const;
+
+// What the preview shows while typing; the real check is parseCreateOrderForm.
+function previewOf(form: HTMLFormElement): { domain: string; count: number | null } {
+  const data = new FormData(form);
+  const domain = String(data.get("domain") ?? "").trim().toLowerCase();
+  const count = Number(data.get("mailboxCount"));
+  return { domain, count: Number.isInteger(count) && count >= 1 && count <= 50 ? count : null };
+}
 
 function FieldError({ id, messages }: { id: string; messages?: string[] }) {
   if (!messages?.length) return null;
@@ -30,6 +46,7 @@ export function CreateOrderForm() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [pending, setPending] = useState(false);
   const [view, setView] = useState<ApiErrorView>({});
+  const [preview, setPreview] = useState<{ domain: string; count: number | null }>({ domain: "", count: 1 });
   const errors = view.fieldErrors ?? {};
 
   // A genuinely new order needs a new key; otherwise the server would treat it
@@ -38,6 +55,7 @@ export function CreateOrderForm() {
     formRef.current?.reset();
     setIdempotencyKey(crypto.randomUUID());
     setView({});
+    setPreview({ domain: "", count: 1 });
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -82,58 +100,86 @@ export function CreateOrderForm() {
     setPending(false);
   }
 
+  const addresses = preview.count
+    ? mailboxAddresses(preview.domain || "your-domain.com", preview.count)
+    : [];
+
   return (
-    <form ref={formRef} onSubmit={onSubmit} noValidate>
-      <fieldset disabled={pending} className="flex flex-col gap-5">
+    <form
+      ref={formRef}
+      onSubmit={onSubmit}
+      onChange={(e) => setPreview(previewOf(e.currentTarget))}
+      noValidate
+      className="grid gap-10 lg:grid-cols-[minmax(0,28rem)_1fr]"
+    >
+      <fieldset disabled={pending} className="flex flex-col gap-6">
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Domain
           <Input
             name="domain"
             placeholder="example.com"
             autoComplete="off"
+            spellCheck={false}
+            className="h-10 bg-surface font-mono"
             aria-invalid={Boolean(errors.domain)}
             aria-describedby="domain-error"
           />
           <FieldError id="domain-error" messages={errors.domain} />
         </label>
 
-        <div className="flex flex-col gap-1.5 text-sm font-medium" role="radiogroup" aria-describedby="provider-error">
-          Provider
-          <div className="flex gap-4 font-normal">
-            <label className="flex items-center gap-2">
-              <input type="radio" name="provider" value="google" defaultChecked /> Google Workspace
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="radio" name="provider" value="microsoft" /> Microsoft 365
-            </label>
+        <fieldset className="flex flex-col gap-1.5" aria-describedby="provider-error">
+          <legend className="mb-1.5 text-sm font-medium">Provider</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {PROVIDER_OPTIONS.map((option, i) => (
+              <label
+                key={option.value}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2.5 rounded-lg border bg-surface px-3 py-3 text-sm font-medium",
+                  "has-checked:border-primary has-checked:bg-accent has-checked:text-accent-foreground",
+                  "has-focus-visible:ring-3 has-focus-visible:ring-ring/50",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="provider"
+                  value={option.value}
+                  defaultChecked={i === 0}
+                  className="accent-primary"
+                />
+                {option.label}
+              </label>
+            ))}
           </div>
           <FieldError id="provider-error" messages={errors.provider} />
-        </div>
+        </fieldset>
 
         <label className="flex flex-col gap-1.5 text-sm font-medium">
-          Mailboxes (1–50)
+          Number of mailboxes
           <Input
             name="mailboxCount"
             type="number"
             min={1}
             max={50}
             defaultValue={1}
-            className="w-32"
+            className="h-10 w-28 bg-surface tabular-nums"
             aria-invalid={Boolean(errors.mailboxCount)}
-            aria-describedby="mailboxCount-error"
+            aria-describedby="mailboxCount-hint mailboxCount-error"
           />
+          <span id="mailboxCount-hint" className="font-normal text-muted-foreground">
+            From 1 to 50.
+          </span>
           <FieldError id="mailboxCount-error" messages={errors.mailboxCount} />
         </label>
 
         {view.formError && (
-          <div role="alert" className="flex flex-col gap-1 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">
+          <div role="alert" className="flex flex-col gap-1 border-l-4 border-destructive bg-surface px-4 py-3 text-sm">
             <p>{view.formError}</p>
             {view.existingOrderId && (
               <p className="flex gap-4">
-                <Link href={`/orders/${view.existingOrderId}`} className="underline underline-offset-4">
+                <Link href={`/orders/${view.existingOrderId}`} className="text-primary underline underline-offset-4">
                   Open that order
                 </Link>
-                <button type="button" onClick={startNewOrder} className="underline underline-offset-4">
+                <button type="button" onClick={startNewOrder} className="text-primary underline underline-offset-4">
                   Start a new order
                 </button>
               </p>
@@ -141,10 +187,24 @@ export function CreateOrderForm() {
           </div>
         )}
 
-        <Button type="submit" size="lg" className="self-start" disabled={pending}>
+        <Button type="submit" size="lg" className="h-10 self-start px-4" disabled={pending}>
           {pending ? "Placing order…" : "Place order"}
         </Button>
       </fieldset>
+
+      <aside className="flex flex-col gap-4 lg:border-l lg:pl-10">
+        <h2 className="text-sm font-medium">This order creates</h2>
+        {preview.count ? (
+          <>
+            <RackPreview count={preview.count} />
+            <p className="font-mono text-[0.8rem] break-all text-muted-foreground">
+              {addresses.length === 1 ? addresses[0] : `${addresses[0]} to ${addresses.at(-1)}`}
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">Enter a number of mailboxes from 1 to 50.</p>
+        )}
+      </aside>
     </form>
   );
 }
