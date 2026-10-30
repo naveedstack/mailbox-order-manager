@@ -18,22 +18,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
       <div className="rounded-lg border bg-surface p-6">
         <LoginForm next={safeNextPath(Array.isArray(next) ? next[0] : next)} />
       </div>
-      {process.env.NODE_ENV !== "production" && (
-        <div className="text-sm text-muted-foreground">
-          <p className="mb-2">Seeded accounts for local development:</p>
-          <table className="w-full">
-            <tbody>
-              {SEEDED_ACCOUNTS.map((account) => (
-                <tr key={account.email}>
-                  <td className="py-0.5 pr-3">{account.role}</td>
-                  <td className="py-0.5 pr-3 font-mono text-xs">{account.email}</td>
-                  <td className="py-0.5 font-mono text-xs">{account.password}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      
     </div>
   );
 }
