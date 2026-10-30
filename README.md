@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mailbox Order Manager
 
-## Getting Started
+**Demo video:** <link>
 
-First, run the development server:
+An internal tool for selling pre-warmed Google and Microsoft mailboxes. Customers place orders (domain,
+provider, 1–50 mailboxes); a background worker provisions them through mocked provider APIs; admins
+see every order, its per-mailbox status and audit log, and retry failed orders.
+
+- Order creation is idempotent (`idempotencyKey` per form, unique per customer).
+- Status flow `PENDING → PROVISIONING → ACTIVE | FAILED`, admin retry `FAILED → PENDING`. Invalid
+  transitions are rejected and every transition is written to an audit log in the same transaction.
+- Any number of workers can run: each claims orders with `SELECT … FOR UPDATE SKIP LOCKED`, so an
+  order is never processed twice.
+
+**Stack:** Next.js 16 (App Router, strict TypeScript), React 19, PostgreSQL 16 (Docker), Prisma 7,
+zod, JWT sessions (jose) with bcrypt passwords, Tailwind + shadcn/ui, Vitest.
+
+Design and patterns: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). How this was built with Claude
+Code: [docs/AI_WORKLOG.md](docs/AI_WORKLOG.md).
+
+## Prerequisites
+
+- Node.js 20.19+, 22.12+ or 24+ (Prisma 7's requirement)
+- Docker with Compose v2 (`docker compose`)
+- Free ports: 5433 (Postgres) and 3000 (app)
+
+## Setup (clean clone)
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env            # defaults work as-is
+docker compose up -d            # Postgres 16 on localhost:5433
+npm install                     # also runs `prisma generate`
+npx prisma migrate deploy       # apply migrations
+npm run db:seed                 # users + 12 sample orders; safe to rerun (resets them)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run dev        # app on http://localhost:3000
+npm run worker     # second terminal: provisions PENDING orders
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open the app on `localhost`, not a LAN IP: the create form needs `crypto.randomUUID()`, which
+browsers only allow on localhost or HTTPS.
 
-## Learn More
+**Two workers:** run `npm run worker` in a third terminal as well. Both pick up orders, and each
+order's audit log still shows exactly one `PENDING → PROVISIONING` claim per attempt.
 
-To learn more about Next.js, take a look at the following resources:
+**Seeing failures in a demo:** each mailbox fails with probability `PROVIDER_FAILURE_RATE` (default
+0.2) and one failed mailbox fails the order. To make failures common:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+PROVIDER_FAILURE_RATE=0.5 npm run worker
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Logins (from the seed)
 
-## Deploy on Vercel
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | admin@example.com | Admin123! |
+| Customer | alice@example.com | Customer123! |
+| Customer | bob@example.com | Customer123! |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Tests
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run test:unit          # state machine, schemas, providers, worker loop, auth, form logic; no database
+npm run test:integration   # needs Postgres running; uses mailbox_orders_test (created and migrated automatically)
+npm test                   # both
+npm run typecheck && npm run lint
+```
+
+## Known limitations
+
+- **An order can stay in `PROVISIONING` forever** if a worker crashes, or the database drops,
+  in the middle of an order. Nothing reclaims it. The fix is a `claimedAt` lease with
+  claim-token fencing, so another worker can take over a stale claim and the old one can no
+  longer write. Retrying the final transition alone isn't safe: if the first commit actually
+  succeeded, the retry reports a false conflict.
+- **Ctrl+C on `npm run worker`** exits immediately instead of finishing the order in progress.
+  npm passes SIGINT on a second time, and the worker treats a second signal as "force quit". An
+  order in progress then hits the limitation above.
+- Sessions are stateless JWTs (8 h). Logging out clears the cookie, but a copied token stays valid
+  until it expires, and role changes only apply at the next login.
+
+Review findings not fixed yet:
+
+- A session for a user deleted after login returns 500 instead of 401.
+- `/login?next=` accepts `/%09/evil.example`, so after login the user can be redirected to
+  another site (open redirect).
+- The UI falls back to the browser's serif font instead of Geist (`--font-sans` refers to itself
+  in `globals.css`).
+- An out-of-range mailbox count shows zod's default message ("Too small: expected number to be
+  >=1") instead of a friendly one.
+
+## Unfinished (4-hour cap)
+
+- The `claimedAt` lease and claim-token fencing above.
+- The review fixes listed above.
+- No React component tests. The form logic is unit-tested as pure functions, and the screens
+  were checked by hand in Chrome.
