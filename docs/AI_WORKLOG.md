@@ -21,7 +21,9 @@ Hard cap (4h): 24:00 PKT
 - 20:25: Sent the correction prompt with 8 changes to the plan.
 - 20:33: Claude Code's review of the revised plan found 4 gaps: seed mailbox rows, `next typegen`, vitest `projects`, and a schedule 10 min over budget. I accepted all four and scheduled the fixes for Phase 0.
 - 20:38: Approved the plan, saved it to `docs/PLAN.md`, and committed it along with this worklog.
-- 
+- 20:43: Claude Code asked me to approve the whole plan at once. I said no and added an execution protocol: it works on one phase at a time and stops after each phase so I can review it. I put the same rule in CLAUDE.md so it survives /clear.
+- 20:45: Added a commit-approval rule to the plan and to CLAUDE.md. Claude Code can’t commit until I’ve reviewed the staged diff and the commit message.
+- 20:52: Committed and pushed the plan and worklog.
 
 ## Key prompts (3–5)
 

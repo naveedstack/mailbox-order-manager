@@ -1,5 +1,8 @@
 // Prisma 7: the connection URL lives in prisma.config.ts, and the runtime
 // connection goes through the @prisma/adapter-pg driver adapter (src/server/db.ts).
+//
+// Tables and columns are snake_case (@@map/@map) because the worker claim in
+// OrderRepository.claimNextPending() is raw SQL and refers to them by name.
 
 generator client {
   provider = "prisma-client"
@@ -8,4 +11,108 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+enum Provider {
+  GOOGLE
+  MICROSOFT
+}
+
+enum OrderStatus {
+  PENDING
+  PROVISIONING
+  ACTIVE
+  FAILED
+}
+
+enum MailboxStatus {
+  PENDING
+  ACTIVE
+  FAILED
+}
+
+enum ActorType {
+  CUSTOMER
+  ADMIN
+  SYSTEM
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  role         Role
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  orders    Order[]
+  auditLogs OrderAuditLog[]
+
+  @@map("users")
+}
+
+model Order {
+  id             String      @id @default(uuid()) @db.Uuid
+  customerId     String      @map("customer_id") @db.Uuid
+  idempotencyKey String      @map("idempotency_key") @db.Uuid
+  domain         String
+  provider       Provider
+  mailboxCount   Int         @map("mailbox_count")
+  status         OrderStatus @default(PENDING)
+  // Incremented by the worker claim, so it counts provisioning attempts.
+  attempts       Int         @default(0)
+  lastError      String?     @map("last_error")
+  // Set by the claim; groundwork for a lease/timeout on stuck PROVISIONING orders.
+  claimedAt      DateTime?   @map("claimed_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  // Raw SQL bypasses @updatedAt, so the claim sets updated_at explicitly.
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  customer  User            @relation(fields: [customerId], references: [id])
+  mailboxes Mailbox[]
+  auditLogs OrderAuditLog[]
+
+  @@unique([customerId, idempotencyKey])
+  @@index([status, createdAt])
+  @@index([customerId, createdAt])
+  @@map("orders")
+}
+
+model Mailbox {
+  id         String        @id @default(uuid()) @db.Uuid
+  orderId    String        @map("order_id") @db.Uuid
+  address    String
+  status     MailboxStatus @default(PENDING)
+  externalId String?       @map("external_id")
+  lastError  String?       @map("last_error")
+  attempts   Int           @default(0)
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, address])
+  @@map("mailboxes")
+}
+
+model OrderAuditLog {
+  id          String       @id @default(uuid()) @db.Uuid
+  orderId     String       @map("order_id") @db.Uuid
+  // null on the creation row (order created directly in PENDING).
+  fromStatus  OrderStatus? @map("from_status")
+  toStatus    OrderStatus  @map("to_status")
+  actorType   ActorType    @map("actor_type")
+  actorUserId String?      @map("actor_user_id") @db.Uuid
+  reason      String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actorUser User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@map("order_audit_logs")
 }
