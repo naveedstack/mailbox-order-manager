@@ -1,41 +1,41 @@
-# Mailbox Order Manager: Implementation Plan
+# Mailbox Order Manager — Implementation Plan
 
 ## Context
-Take-home task (TASK.md): a Next.js + Postgres internal tool with idempotent order creation, a strict order state machine with audit log, a safe background worker that uses mocked Google/Microsoft providers, admin and customer screens, tests, and docs. Hard cap of 3–4h, built in TASK.md's priority order. Reviewers weight correctness (idempotency, safe worker), layering, and visible review of AI output.
+Take-home task (TASK.md): Next.js + Postgres internal tool with idempotent order creation, a strict order state machine with audit log, a safe background worker using mocked Google/Microsoft providers, admin and customer screens, tests, and docs. 4h hard cap, built in TASK.md's priority order. Reviewers weight correctness (idempotency, safe worker), layering, and visible review of AI output.
 
-**What's already in the repo:** Next **16.4.3** (middleware is now `proxy.ts`; `cacheComponents: true` is set in `next.config.ts`), Prisma **7.10.1** with `@prisma/adapter-pg` (client is generated to `src/generated/prisma`, and the URL lives in `prisma.config.ts`), the `prisma` singleton in `src/server/db.ts` (reuse it), zod 4.6, vitest with the `@` alias, tsx, docker-compose (Postgres 16 on host port 5433), and the shadcn `button`. jose and bcrypt are **not** installed. The folder is **not a git repo yet**.
+**Already in the repo:** Next **16.4.3** (middleware is now `proxy.ts`; `cacheComponents: true` set in `next.config.ts`), Prisma **7.10.1** with `@prisma/adapter-pg` (client generated to `src/generated/prisma`, URL in `prisma.config.ts`), `prisma` singleton in `src/server/db.ts` (reuse it), zod 4.6, vitest with `@` alias, tsx, docker-compose (Postgres 16 on host port 5433), shadcn `button`. jose and bcryptjs **not** installed. Folder is **not a git repo yet**.
 
 ---
 
-## Problems in the design decisions (review these first)
+## Design decisions (final, after review)
 
-1. **The P2002 catch has to live in the repository, and it has to run outside the failed transaction.** Services can't see Prisma error codes (CLAUDE.md rule), so the method is `OrderRepository.createIdempotent()` and it returns `{ order, created }`. Order + mailboxes + creation audit row are created in one `$transaction`. A unique violation aborts that Postgres transaction, so the "fetch the existing order" read has to happen *after* the rollback, not inside it. With the pg driver adapter, P2002's `meta.target` shape differs from the classic engine, so match on `code === 'P2002'` only.
-2. **Same key with a different payload.** If the domain, provider or count differs from the stored order, return `409 ConflictError (IDEMPOTENCY_KEY_REUSED)` and don't silently return the old order. This costs one comparison.
-3. **"Admin retry only" is a rule about who acts, not just about the from/to pair.** If the actor isn't in the table, the role check ends up ad hoc in the service. Make the table `from → to → allowedActors` (`SYSTEM` for worker transitions, `ADMIN` for retry) and the signature `assertTransition(from, to, actorType)`. It stays pure and fully unit-testable.
-4. **CLAUDE.md contradicts itself.** It says "every status change goes through `OrderService.transition()`", but the claim is raw SQL in `claimNextPending()`. Name the claim as the single documented exception, and add a unit test that asserts `PENDING→PROVISIONING` by `SYSTEM` is allowed by the table, so the SQL and the table can't drift apart. Update the CLAUDE.md wording.
-5. **The claim plus its audit row can be one statement.** A CTE does it: `WITH claimed AS (UPDATE … RETURNING …), _ AS (INSERT INTO order_audit_logs … SELECT FROM claimed) SELECT * FROM claimed`. That makes it atomic without an interactive transaction. Also:
-   - Repeat `AND status='PENDING'` in the outer WHERE.
-   - Cast enums (`'PROVISIONING'::"OrderStatus"`).
-   - Use the real `@@map` table and column names in the SQL.
-   - Map the snake_case result back to the domain type in the repo.
-6. **20% failure per mailbox makes big orders fail almost every time.** A 50-mailbox order succeeds with probability 0.8⁵⁰ ≈ 0.001%. Run sequentially at 1–3s per call, it also takes 50–150s. Mitigations:
-   - Call the provider per mailbox with **bounded concurrency** (e.g. 5).
-   - Make `PROVIDER_FAILURE_RATE` and the delay configurable by env.
-   - Rely on "retry only re-provisions non-ACTIVE mailboxes" so orders converge over retries, and say so in the README.
-   - For the demo video, use small orders (1–3 mailboxes).
-7. **Stuck PROVISIONING.** I agree with documenting it rather than building a fix, with two cheap additions:
-   - Add a `claimedAt` column now, so a future lease is a small follow-up.
-   - Handle SIGINT/SIGTERM gracefully: stop claiming and finish the current order, so the demo doesn't leave stuck orders.
-
-   Note in the README that a naive reaper (PROVISIONING→PENDING after a timeout) would break "never process twice" unless the final transition is fenced on a claim token.
-8. **Next 16 specifics:**
-   - Route protection is `src/proxy.ts`, not `middleware.ts`. It is only an optimistic check, and the services enforce access.
-   - With `cacheComponents: true`, reading `cookies()` outside `<Suspense>` errors. **Recommendation:** remove `cacheComponents` and `partialPrefetching` from `next.config.ts`. This is a fully dynamic, authenticated app and the flag adds risk without benefit.
-9. **Use `bcryptjs`, not `bcrypt`.** Native `bcrypt` needs install scripts, and `package.json` already uses an `allowScripts` allowlist, so it risks failing on a clean clone.
-10. **Customers asking for another customer's order get `NotFoundError`, not `ForbiddenError`.** This avoids leaking whether the order exists. `ForbiddenError` is for role violations, like a customer calling retry.
-11. **Generate the idempotency key in a client component** (`useState(() => crypto.randomUUID())`), not in a Server Component, because randomness in RSC conflicts with caching. After a successful create, redirect to the detail page so "create another" mounts a fresh key.
-12. **The integration tests need their own DB.** The `docker-entrypoint-initdb.d` scripts only run on a fresh volume, so use a vitest `globalSetup` instead: `CREATE DATABASE mailbox_orders_test` if it's missing, then `prisma migrate deploy` with `DATABASE_URL` overridden, then truncate between tests.
-13. **Repo hygiene:** `git init` before the first commit. Keep the task PDF out of the repo.
+1. **Idempotent creation.** Client generates `idempotencyKey` (UUID) on form mount. Unique constraint on `(customerId, idempotencyKey)`. `OrderRepository.createIdempotent()` creates order + mailboxes + creation audit row in one `$transaction`. On P2002 (match `code === 'P2002'` only; `meta.target` differs with the pg adapter), re-read the existing order **after** the rollback (an aborted Postgres transaction can't run further queries). Returns `{ order, created }`. Services never see Prisma error codes.
+2. **Same key, different payload** (domain/provider/count differ) → `409 ConflictError` code `IDEMPOTENCY_KEY_REUSED`.
+3. **Actor-aware state machine.** Table is `from → to → allowedActors`; signature `assertTransition(from, to, actorType)`. Allowed:
+   - `PENDING → PROVISIONING` (SYSTEM)
+   - `PROVISIONING → ACTIVE` (SYSTEM)
+   - `PROVISIONING → FAILED` (SYSTEM)
+   - `FAILED → PENDING` (ADMIN)
+   Everything else, including same-state, is rejected with `InvalidTransitionError`.
+4. **Single gate with one documented exception.** Every status change goes through `OrderService.transition()`, except the worker claim (`OrderRepository.claimNextPending()`, raw SQL). A unit test asserts `PENDING → PROVISIONING` by SYSTEM is allowed by the table so SQL and table can't drift. CLAUDE.md wording updated to say this.
+5. **Atomic claim.** Try a single-statement CTE first:
+   `WITH claimed AS (UPDATE orders SET status='PROVISIONING'::"OrderStatus", claimed_at=now(), updated_at=now(), attempts=attempts+1 WHERE id = (SELECT id FROM orders WHERE status='PENDING' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) AND status='PENDING' RETURNING *), audit AS (INSERT INTO order_audit_logs … SELECT … FROM claimed) SELECT * FROM claimed`
+   - Use real `@@map` table/column names; cast enums; map snake_case result back to the domain type in the repo.
+   - **Raw SQL bypasses Prisma's `@updatedAt`**, so `updated_at = now()` is set explicitly. `attempts` is incremented here.
+   - **Fallback (if the CTE fights enum casts/mapping after one attempt):** interactive `$transaction` running the `$queryRaw` SKIP LOCKED claim, then `auditLog.create`. Equally atomic.
+6. **Provider failures are per mailbox.** 20% per call makes 50-mailbox orders almost never succeed (0.8⁵⁰ ≈ 0.001%) and take 50–150s sequentially. So:
+   - bounded concurrency (5) per order
+   - `PROVIDER_FAILURE_RATE`, `PROVIDER_MIN_DELAY_MS`, `PROVIDER_MAX_DELAY_MS` env-configurable (default 0.2, 1000, 3000)
+   - retry only re-provisions non-ACTIVE mailboxes, so orders converge over retries (README)
+   - demo: small orders (1–3 mailboxes) and `PROVIDER_FAILURE_RATE=0.5` to get a failure reliably on video
+7. **Retry resets failed mailboxes.** `FAILED → PENDING` (ADMIN) also sets that order's FAILED mailboxes back to PENDING in the **same transaction**, so the UI is consistent.
+8. **Stuck PROVISIONING (documented limitation).** Add `claimedAt` column now (future lease = small follow-up). Worker handles SIGINT/SIGTERM gracefully (stop claiming, finish current order). README notes a naive reaper would break "never process twice" unless the final transition is fenced on a claim token.
+9. **Next 16:** route protection in `src/proxy.ts` (optimistic only; services enforce access). Remove `cacheComponents` and `partialPrefetching` from `next.config.ts` (fully dynamic authenticated app).
+10. **Auth:** `bcryptjs` (not native `bcrypt`; avoids install scripts on clean clone). HS256 JWT `{sub, role}` signed with `AUTH_SECRET` in httpOnly, SameSite=Lax cookie, 8h expiry.
+11. **Authorization errors:** customer requesting another customer's order → `NotFoundError` (no existence leak). `ForbiddenError` for role violations (customer calling retry).
+12. **Idempotency key generated in a client component** (`useState(() => crypto.randomUUID())`). After create, redirect to detail page so a new form mounts a fresh key.
+13. **Composition root stays minimal.** `container.ts` = plain factory functions wiring repos → services. No DI library.
+14. **Repo hygiene:** `git init` before first commit; task PDF stays out of the repo (`.gitignore`).
 
 ---
 
@@ -57,17 +57,18 @@ model Order {         // @@map("orders"), snake_case @map on columns
   id uuid pk, customerId -> User, idempotencyKey @db.Uuid,
   domain, provider Provider, mailboxCount Int,
   status OrderStatus @default(PENDING),
-  attempts Int @default(0), lastError String?, claimedAt DateTime?,
-  createdAt, updatedAt
+  attempts Int @default(0),            // incremented by the claim
+  lastError String?, claimedAt DateTime?,
+  createdAt, updatedAt                 // updatedAt set explicitly in raw SQL
   mailboxes Mailbox[], auditLogs OrderAuditLog[]
   @@unique([customerId, idempotencyKey])
-  @@index([status, createdAt])        // worker claim + admin filter
-  @@index([customerId, createdAt])    // customer list
+  @@index([status, createdAt])         // worker claim + admin filter
+  @@index([customerId, createdAt])     // customer list
 }
 
 model Mailbox {       // @@map("mailboxes")
   id uuid pk, orderId -> Order (onDelete: Cascade),
-  address String,                      // e.g. mailbox-01@<domain>
+  address String,                      // mailbox-01@<domain>
   status MailboxStatus @default(PENDING),
   externalId String?, lastError String?, attempts Int @default(0), updatedAt
   @@unique([orderId, address])
@@ -83,7 +84,12 @@ model OrderAuditLog { // @@map("order_audit_logs")
 }
 ```
 
-Seed: `admin@example.com` and 2 customers (bcryptjs hashes), plus a few orders in mixed states with matching audit rows so the admin list has data to filter.
+**Seed:** `admin@example.com` + 2 customers (bcryptjs hashes), plus a few orders in **PENDING, ACTIVE and FAILED only**. **No PROVISIONING orders**: no worker owns them, so they would be stuck forever. Each order gets exactly `mailboxCount` mailbox rows, with statuses consistent with the order:
+- **PENDING** → all mailboxes PENDING; audit: `null → PENDING` (CUSTOMER)
+- **ACTIVE** → all mailboxes ACTIVE (with `externalId`); audit: `null → PENDING` (CUSTOMER), `PENDING → PROVISIONING` (SYSTEM), `PROVISIONING → ACTIVE` (SYSTEM)
+- **FAILED** → at least one mailbox FAILED with `lastError`, the rest ACTIVE; order `lastError` set; audit: `null → PENDING`, `PENDING → PROVISIONING`, `PROVISIONING → FAILED` (SYSTEM, reason "n of m mailboxes failed")
+
+Audit timestamps increase in order of each order's history. The seed is idempotent (it deletes the seed data and recreates it), so re-running it is safe.
 
 ---
 
@@ -94,7 +100,7 @@ domain/            pure TS, no Prisma
   order-state-machine.ts   transition table + assertTransition(from,to,actorType)
   errors.ts                AppError + ValidationError/NotFoundError/ForbiddenError/
                            InvalidTransitionError/ConflictError/UnauthorizedError
-  types.ts                 Actor {userId, role}, OrderStatus/Provider re-exports as TS unions
+  types.ts                 Actor {userId, role}, status/provider TS unions
   schemas.ts               zod: createOrderInput, listOrdersQuery, loginInput, retryInput
 repositories/      only Prisma users
   order-repository.ts, mailbox-repository.ts, user-repository.ts
@@ -104,7 +110,7 @@ providers/
   mailbox-provider.ts (interface), mock-provider-base.ts,
   mock-google-provider.ts, mock-microsoft-provider.ts, registry.ts
 server/
-  db.ts (exists), container.ts (composition root, wires repos→services),
+  db.ts (exists), container.ts (plain factories),
   auth/session.ts (jose sign/verify, getSession, requireSession),
   http/error-mapper.ts (toErrorResponse → {status, body})
 worker/
@@ -119,101 +125,138 @@ components/        order-status-badge, audit-log-table, mailbox-table, paginatio
 tests/integration/ create-order.test.ts, claim-concurrency.test.ts, setup/global-setup.ts
 ```
 
-**Mutations go through route handlers. Reads go through Server Components that call services.** Route handlers make the `{ error: { code, message, details? } }` + HTTP status contract real and testable. Pages map `NotFoundError → notFound()` and `UnauthorizedError → redirect('/login')`.
+**Mutations go through route handlers; reads go through Server Components calling services.** Route handlers make the `{ error: { code, message, details? } }` + HTTP status contract real and testable. Pages map `NotFoundError → notFound()` and `UnauthorizedError → redirect('/login')`.
 
 ---
 
 ## Interfaces (signatures only)
 
 **OrderRepository**
-- `createIdempotent(data: NewOrder, audit: AuditInput) → { order, created }`. Creates order + mailboxes + the `null→PENDING` audit row in one transaction. On P2002 it runs `findByKey` after the rollback.
-- `findById(id) → OrderWithDetails | null` (with mailboxes and audit log ordered by `createdAt`)
+- `createIdempotent(data: NewOrder, audit: AuditInput) → { order, created }`: order + mailboxes + `null→PENDING` audit row in one transaction; on P2002, `findByKey` after rollback.
+- `findById(id) → OrderWithDetails | null` (mailboxes + audit log ordered by `createdAt`)
 - `list(filter: {customerId?, status?, provider?}, page: {page, pageSize}) → { items, total }`
-- `transition(id, expectedFrom, to, audit, patch?) → boolean`. Runs `updateMany where {id, status: expectedFrom}`, and only if `count===1` inserts the audit row, all in one `$transaction`. `patch` covers `lastError` and incrementing `attempts`.
-- `claimNextPending() → Order | null`. This is the CTE claim (SKIP LOCKED + `claimedAt=now()` + audit row in a single statement).
+- `transition(id, expectedFrom, to, audit, effects?) → boolean`: one `$transaction`: `updateMany where {id, status: expectedFrom}`; only if `count === 1`, insert audit row and apply effects. `effects = { lastError?: string; resetFailedMailboxes?: boolean }`.
+- `claimNextPending() → Order | null`: CTE claim (fallback: interactive transaction). Sets `claimed_at`, `updated_at`, increments `attempts`, writes audit row.
 
-**MailboxRepository:** `listNotActive(orderId)`, `markActive(id, externalId)`, `markFailed(id, error)`
+**MailboxRepository:** `listNotActive(orderId)`, `markActive(id, externalId)`, `markFailed(id, error)` (both increment mailbox `attempts`)
 
 **UserRepository:** `findByEmail(email)`, `findById(id)`
 
-**OrderService** (deps injected through a factory)
-- `createOrder(actor, input)`: customer only, zod-validated upstream; payload-mismatch check → `ConflictError`
+**OrderService** (deps injected via factory)
+- `createOrder(actor, input)`: CUSTOMER only; payload-mismatch check → `ConflictError`
 - `getOrder(actor, id)`: ownership check → `NotFoundError`
-- `listOrders(actor, query)`: customers are forced to their own `customerId`; admins can filter freely
-- `retryOrder(actor, id, reason?)` → `transition(id, 'PENDING', actor, reason)`
-- `transition(id, to, actor, reason?, patch?)`: **the single gate**. It reads the current status, calls `assertTransition`, then `repo.transition`. When that returns false it re-reads: the order is gone → `NotFoundError`; otherwise → `ConflictError`.
+- `listOrders(actor, query)`: customers forced to own `customerId`; admins filter freely
+- `retryOrder(actor, id, reason?)` → `transition(id, 'PENDING', actor, reason, { resetFailedMailboxes: true })`
+- `transition(id, to, actor, reason?, effects?)`: **the single gate**: read current status → `assertTransition` → `repo.transition`; on `false`, re-read: missing → `NotFoundError`, else → `ConflictError`.
 
-**MailboxProvider:** `readonly name: Provider`, `provisionMailbox({ address, domain }) → Promise<{ externalId }>`, which throws `ProviderError` on failure. Mocks take `{ rng: () => number, sleep: (ms) => Promise<void>, failureRate, minDelayMs, maxDelayMs }`. `ProviderRegistry.get(provider)` throws on an unknown provider.
+**MailboxProvider:** `readonly name: Provider`; `provisionMailbox({ address, domain }) → Promise<{ externalId }>`, throws `ProviderError`. Mocks take `{ rng, sleep, failureRate, minDelayMs, maxDelayMs }`. `ProviderRegistry.get(provider)` throws on unknown.
 
 **ProvisioningService:** `processNext() → 'idle' | 'processed'`
-1. `claimNextPending()`, or return `'idle'`
+1. `claimNextPending()` or return `'idle'`
 2. `listNotActive`
-3. Provision with a concurrency limit of 5, marking each mailbox active or failed
-4. If every mailbox is ACTIVE → `transition(ACTIVE, SYSTEM)`. Otherwise → `transition(FAILED, SYSTEM, reason "n of m mailboxes failed", patch lastError)`. An unexpected exception tries `transition(FAILED)` and logs.
+3. provision with concurrency 5, marking each mailbox active/failed
+4. all ACTIVE → `transition(ACTIVE, SYSTEM)`; else `transition(FAILED, SYSTEM, "n of m mailboxes failed", { lastError })`. Unexpected exception → attempt `transition(FAILED)` and log.
 
-**AuthService:** `login(email, password) → SessionPayload` (bcryptjs compare; same error for an unknown user and a wrong password). `session.ts` signs an HS256 JWT `{sub, role}` with `AUTH_SECRET` into an httpOnly, SameSite=Lax cookie that expires in 8h.
+**AuthService:** `login(email, password) → SessionPayload` (bcryptjs compare; same error for unknown user and wrong password).
 
-**Error mapper:**
+**Error mapper**
 
 | Error | Status | Code |
 |---|---|---|
 | `ValidationError`, `ZodError` | 400 | `VALIDATION_ERROR` (`details` = flattened issues) |
-| `UnauthorizedError` | 401 | |
-| `ForbiddenError` | 403 | |
-| `NotFoundError` | 404 | |
+| `UnauthorizedError` | 401 | `UNAUTHORIZED` |
+| `ForbiddenError` | 403 | `FORBIDDEN` |
+| `NotFoundError` | 404 | `NOT_FOUND` |
 | `InvalidTransitionError` | 409 | `INVALID_TRANSITION` |
-| `ConflictError` | 409 | `CONFLICT` |
-| Anything unknown | 500 | `INTERNAL_ERROR` (generic message, logged server-side) |
+| `ConflictError` | 409 | `CONFLICT` / `IDEMPOTENCY_KEY_REUSED` |
+| unknown | 500 | `INTERNAL_ERROR` (generic message, logged server-side) |
 
 ## Worker loop
 `npm run worker` → `tsx src/worker/index.ts`. Env: `WORKER_POLL_MS=1000`.
-1. Loop while not stopping: run `processNext()`. If idle, sleep `POLL_MS`, and the sleep is interruptible by shutdown. Errors are logged, the loop backs off and continues.
-2. SIGINT/SIGTERM sets `stopping = true`. The current order finishes, then `prisma.$disconnect()` runs.
-3. One order per process at a time. To demo safety, run two workers in two terminals: the SKIP LOCKED claim keeps their order sets disjoint.
+1. While not stopping: `processNext()`; if idle, sleep `WORKER_POLL_MS` (interruptible). Errors logged, back off, continue.
+2. SIGINT/SIGTERM → `stopping = true`; current order finishes; `prisma.$disconnect()`.
+3. One order per process at a time. Safety demo: two workers in two terminals; SKIP LOCKED keeps their order sets disjoint.
 
 ---
 
-## Phases (priority order, ~3h45m budget)
+## Scripts
+
+| Script | Purpose |
+|---|---|
+| `test:unit` | `vitest run --project unit`: unit tests, no DB needed |
+| `test:integration` | `vitest run --project integration`: against docker Postgres (test DB via `globalSetup`) |
+| `test` | runs both projects |
+| `typecheck` | `next typegen && tsc --noEmit` (keep typegen so Next 16 route/page types are fresh on a clean clone) |
+| `worker` | `tsx src/worker/index.ts` |
+| `db:seed` | seed script (also wired in `prisma.config.ts`) |
+
+Tests are split with vitest `projects`: `unit` (`src/**/*.test.ts`, no setup) and `integration` (`tests/integration/**/*.test.ts`, with `globalSetup`). The DB setup is attached **only** to the integration project, so `test:unit` never needs Postgres.
+
+Integration `globalSetup`: `CREATE DATABASE mailbox_orders_test` if missing → `prisma migrate deploy` with `DATABASE_URL` overridden → truncate between tests. (Init scripts in `docker-entrypoint-initdb.d` only run on a fresh volume, so don't rely on them.)
+
+`.env.example`: `DATABASE_URL`, `AUTH_SECRET`, `WORKER_POLL_MS=1000`, `PROVIDER_FAILURE_RATE=0.2` (comment: use 0.5 for demos), `PROVIDER_MIN_DELAY_MS=1000`, `PROVIDER_MAX_DELAY_MS=3000`.
+
+---
+
+## Execution protocol
+
+- **One phase at a time.** When a phase is done, run `npm run typecheck` and the relevant tests, show the output, summarize what changed, then **STOP** and wait for the go-ahead before starting the next phase.
+- **Small conventional commits within a phase.**
+- **Never commit without explicit approval.** Before every commit:
+  1. Stage the files.
+  2. Show `git diff --staged --stat` and the proposed commit message.
+  3. Ask "Commit?" and wait for a yes.
+  4. If the answer is no or comes with changes, adjust and ask again.
+- The current approval covers **Phase 0 only**.
+
+### Phase 0 kickoff (git init and the scaffold commit are already done by the user)
+1. Check `git status` and `git ls-files`. Make sure `.env`, `node_modules`, `src/generated` and the task PDF are **not** tracked. If any are, fix `.gitignore`, `git rm --cached` them, then ask before committing `chore: fix gitignore`.
+2. If CLAUDE.md isn't committed yet, propose committing it alone: `docs: add CLAUDE.md`.
+3. Save this plan to `docs/PLAN.md` (including this section and the four fixes) and propose committing it with `docs/AI_WORKLOG.md`: `docs: add implementation plan and AI worklog`.
+4. Add these rules to CLAUDE.md under **Workflow** (commit them with the decision-4 wording change, after approval):
+   - "Implement docs/PLAN.md one phase at a time; stop after each phase for review."
+   - "IMPORTANT: Never run git commit without asking me first. Show the staged diff stat and proposed message, then wait for approval."
+5. Do the Phase 0 tasks (row 0 below, minus `git init`), including the four fixes: seed consistency, `next typegen` in `typecheck`, vitest `projects` split, and the budget kept as is. Stop after Phase 0.
+
+## Phases (priority order)
+
+About 45 min already used on setup and planning. Remaining budget to the 4h cap: ~3h15m.
 
 | # | Phase | Deliverables | Budget |
 |---|---|---|---|
-| 0 | Foundations | `git init`; add jose, bcryptjs; remove cacheComponents; schema + first migration; `domain/errors.ts`; error mapper; `container.ts`; `.env.example` gets `AUTH_SECRET`, `PROVIDER_FAILURE_RATE`, `WORKER_POLL_MS`; `db:seed` script + `prisma.config.ts` seed | 25m |
-| 1 | Order creation + state machine | **TDD** the state machine; OrderRepository (createIdempotent, transition); OrderService (createOrder, transition); `POST /api/orders`; integration test for creation. Services take an `Actor`, so no auth is needed yet | 50m |
-| 2 | Provider + worker | Provider interface, mocks, registry (unit tests with a seeded RNG); `claimNextPending` CTE + concurrency test; ProvisioningService; worker loop + signals | 45m |
-| 3 | Auth + admin | session.ts, AuthService, login/logout routes, `proxy.ts`, seed users; admin list with zod-parsed `searchParams` (status, provider, page), retry route + button, detail page with mailbox and audit tables | 45m |
-| 4 | Customer views | Orders list, create form (client key + zod), detail page reused from phase 3 with an ownership check | 25m |
-| 5 | Tests sweep | Fill the gaps in the test list below; `npm run typecheck && npm test` green | 15m |
-| 6 | Docs + video | README (clean-clone steps, logins, limitations), `docs/ARCHITECTURE.md`, `docs/AI_WORKLOG.md` (keep notes as you go, especially where Claude was wrong), demo video | 25m |
+| 0 | Foundations | gitignore check; add jose, bcryptjs; remove cacheComponents; schema + first migration; `domain/errors.ts`; error mapper; `.env.example`; seed (consistent mailboxes + audit history); vitest `projects` split; keep `next typegen` in `typecheck`; CLAUDE.md wording (decision 4) | 15m |
+| 1 | Order creation + state machine | **TDD** state machine; OrderRepository (createIdempotent, transition); OrderService (createOrder, transition); `POST /api/orders`; creation integration test. Services take an `Actor`, so no auth needed yet | 40m |
+| 2 | Provider + worker | Provider interface, mocks, registry; `claimNextPending` (CTE → fallback) + concurrency test; ProvisioningService; worker loop + signals | 35m |
+| 3 | Auth + admin | session.ts, AuthService, login/logout routes, `proxy.ts`; admin list with zod-parsed `searchParams` (status, provider, page), retry route + button, detail page with mailbox + audit tables | 35m |
+| 4 | Customer views | Order list, create form (client key + zod), detail page reused with ownership check | 15m |
+| 5 | Review + fixes | `/code-review` or subagent review against TASK.md + CLAUDE.md; fix correctness findings only; all MUST tests green | 10m |
+| 6 | Docs + video | README (clean-clone steps, logins, limitations), `docs/ARCHITECTURE.md`, finish `docs/AI_WORKLOG.md`, clean-clone test, demo video | 45m |
+|   | Buffer | | 10m |
 
-Commit after each green step with the conventional-commit skill. Expect about 15–25 commits.
+**Cut order if behind schedule:** STRETCH tests → admin pagination polish → customer list styling → graceful-shutdown niceties. Never cut: idempotency, safe claim, audit log, README clean-clone check.
+
+Propose a commit after each green step with the conventional-commit skill, and commit only after approval (see Execution protocol) (expect 15–25 commits).
 
 ## Test list
 
-**Unit (pure, no DB)**
-- **State machine:** table-driven over all 16 from/to pairs × actor types. Only the 4 allowed pairs pass with the right actor; same-state transitions are rejected; a customer can't retry; `InvalidTransitionError` carries `from`/`to` in `details`; the claim transition is allowed for SYSTEM (guards the SQL/table drift from problem 4).
-- **Mock providers:** `rng` below `failureRate` → throws `ProviderError`; above it → returns an `externalId`; the delay stays in `[min, max]` (injected `sleep` spy); the registry returns the right strategy and throws on an unknown provider.
-- **Error mapper:** each subclass → status + code; ZodError → 400 with details; an unknown error → 500 with no internal message leaked.
-- **ProvisioningService** with in-memory fakes:
-  - all mailboxes succeed → ACTIVE
-  - one fails → FAILED with a `lastError`
-  - a retried order only provisions non-ACTIVE mailboxes
-  - claim returns null → `'idle'`
-- **OrderService authorization:** a customer can't read another customer's order (NotFound); a customer can't retry (Forbidden); a customer's list is forced to their own orders.
+### MUST
+- **State machine (unit):** the 4 allowed transitions pass with the right actor; same-state and all other pairs are rejected; a customer can't retry; `InvalidTransitionError` carries `from`/`to`; `PENDING → PROVISIONING` by SYSTEM is allowed (guards SQL/table drift).
+- **Order creation (integration):** creates order + N mailboxes + 1 audit row; same key twice → same order id, 1 row; `Promise.all` of 5 creates with the same key → exactly 1 order; same key, different customer → 2 orders; same key, different payload → `ConflictError`.
+- **Claim concurrency (integration):** seed 10 PENDING orders, run 20 parallel `claimNextPending()` → exactly 10 non-null, distinct ids, all PROVISIONING, one audit row each, `updated_at` changed.
 
-**Integration (real Postgres, test DB)**
-- **Order creation (the required one):**
-  - creates the order + N mailboxes + 1 audit row
-  - the same key twice → same order id, still 1 row
-  - `Promise.all` of 5 creates with the same key → exactly 1 order (proves the race is handled)
-  - same key, different customer → 2 orders
-  - same key, different payload → ConflictError
-- **Claim concurrency:** seed 10 PENDING orders and run 20 parallel `claimNextPending()` calls. Expect exactly 10 non-null results with distinct ids, every claimed order in PROVISIONING, and one audit row each.
-- **Transition conflict:** a stale `expectedFrom` → ConflictError and no audit row written.
+### STRETCH (only if time remains)
+- Exhaustive table-driven state machine test (16 pairs × 3 actors)
+- Mock providers: rng < failureRate throws `ProviderError`; delay within bounds; registry
+- Error mapper: each subclass → status + code; unknown → 500 without leaking message
+- ProvisioningService with in-memory fakes: all succeed → ACTIVE; one fails → FAILED; retry only provisions non-ACTIVE
+- OrderService authorization: NotFound for others' orders; Forbidden for customer retry
+- Transition conflict: stale `expectedFrom` → `ConflictError`, no audit row
+- Retry resets FAILED mailboxes to PENDING
 
 ## Verification
 1. `docker compose up -d --wait && npx prisma migrate dev && npm run db:seed`
-2. `npm run typecheck && npm test`: unit + integration green
-3. `npm run dev`, then two terminals of `npm run worker`. As a customer, create a 2-mailbox order and double-click submit: only one order appears. Watch it go PENDING→PROVISIONING→ACTIVE/FAILED, with per-mailbox status and the audit log on the detail page.
-4. As admin, filter by FAILED and provider, paginate, and retry. Only the failed mailboxes are re-provisioned, and the audit log shows `FAILED→PENDING (ADMIN)`.
-5. Error contract: `curl` `POST /api/orders` with `mailboxCount: 51` → 400 `{error:{code:'VALIDATION_ERROR',…}}`; retry as a customer → 403; retry on an ACTIVE order → 409.
-6. Clean-clone check: fresh clone into `/tmp`, follow the README verbatim, time it (< 10 min).
+2. `npm run typecheck && npm test` green
+3. `npm run dev` + two terminals of `npm run worker` (with `PROVIDER_FAILURE_RATE=0.5`). As a customer, create a 2-mailbox order and double-click submit → one order. Watch PENDING → PROVISIONING → ACTIVE/FAILED with per-mailbox status and audit log.
+4. As admin: filter FAILED + provider, paginate, retry → failed mailboxes reset to PENDING, only those re-provisioned; audit log shows `FAILED → PENDING (ADMIN)`.
+5. Error contract via `curl`: `mailboxCount: 51` → 400 `VALIDATION_ERROR`; retry as customer → 403; retry on ACTIVE → 409.
+6. Clean-clone check: fresh clone into `/tmp`, follow README verbatim, timed (< 10 min).
