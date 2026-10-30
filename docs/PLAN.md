@@ -207,7 +207,7 @@ Integration `globalSetup`: `CREATE DATABASE mailbox_orders_test` if missing → 
   2. Show `git diff --staged --stat` and the proposed commit message.
   3. Ask "Commit?" and wait for a yes.
   4. If the answer is no or comes with changes, adjust and ask again.
-- The current approval covers **Phase 0 only**.
+- The current approval covers **Phase 1 only** (Phase 0 is done).
 
 ### Phase 0 kickoff (git init and the scaffold commit are already done by the user)
 1. Check `git status` and `git ls-files`. Make sure `.env`, `node_modules`, `src/generated` and the task PDF are **not** tracked. If any are, fix `.gitignore`, `git rm --cached` them, then ask before committing `chore: fix gitignore`.
@@ -225,9 +225,9 @@ About 45 min already used on setup and planning. Remaining budget to the 4h cap:
 | # | Phase | Deliverables | Budget |
 |---|---|---|---|
 | 0 | Foundations | gitignore check; add jose, bcryptjs; remove cacheComponents; schema + first migration; `domain/errors.ts`; error mapper; `.env.example`; seed (consistent mailboxes + audit history); vitest `projects` split; keep `next typegen` in `typecheck`; CLAUDE.md wording (decision 4) | 15m |
-| 1 | Order creation + state machine | **TDD** state machine; OrderRepository (createIdempotent, transition); OrderService (createOrder, transition); `POST /api/orders`; creation integration test. Services take an `Actor`, so no auth needed yet | 40m |
+| 1 | Order creation + state machine | **TDD** state machine; OrderRepository (createIdempotent, transition); OrderService (createOrder, transition); creation + transition integration tests through the service. Services take an `Actor`, so no auth or HTTP yet (`POST /api/orders` moved to Phase 3) | 40m |
 | 2 | Provider + worker | Provider interface, mocks, registry; `claimNextPending` (CTE → fallback) + concurrency test; ProvisioningService; worker loop + signals | 35m |
-| 3 | Auth + admin | session.ts, AuthService, login/logout routes, `proxy.ts`; admin list with zod-parsed `searchParams` (status, provider, page), retry route + button, detail page with mailbox + audit tables | 35m |
+| 3 | Auth + admin | session.ts, AuthService, login/logout routes, `proxy.ts`; `POST /api/orders` + route tests (201 created / 200 replay / 409 key reused / 401 no session); admin list with zod-parsed `searchParams` (status, provider, page), retry route + button, detail page with mailbox + audit tables | 35m |
 | 4 | Customer views | Order list, create form (client key + zod), detail page reused with ownership check | 15m |
 | 5 | Review + fixes | `/code-review` or subagent review against TASK.md + CLAUDE.md; fix correctness findings only; all MUST tests green | 10m |
 | 6 | Docs + video | README (clean-clone steps, logins, limitations), `docs/ARCHITECTURE.md`, finish `docs/AI_WORKLOG.md`, clean-clone test, demo video | 45m |

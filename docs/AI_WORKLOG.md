@@ -24,7 +24,11 @@ Hard cap (4h): 24:00 PKT
 - 20:43: Claude Code asked me to approve the whole plan at once. I said no and added an execution protocol: it works on one phase at a time and stops after each phase so I can review it. I put the same rule in CLAUDE.md so it survives /clear.
 - 20:45: Added a commit-approval rule to the plan and to CLAUDE.md. Claude Code can’t commit until I’ve reviewed the staged diff and the commit message.
 - 20:52: Committed and pushed the plan and worklog.
-
+- 21:15: Finished Phase 0: dependencies, Next config, the schema and its migration, seed data with mailbox rows, error types and the error mapper, separate vitest projects for unit and integration tests, and the scripts. Typecheck and unit tests pass. Committed and pushed.
+- 21:16: Ran `/clear` and started Phase 1 in plan mode.
+- 21:18: Worked out the Phase 1 plan in plan mode. It covers the files, the test cases, the repository and service signatures, and the commit order. I reviewed the plan and approved it.
+- 21:26: Started implementing Phase 1 with TDD, committing the failing tests first.
+- 21:34: Finished Phase 1: the state machine, OrderRepository (createIdempotent and transition), OrderService (createOrder and transition) and the creation integration test. Typecheck, unit and integration tests pass. Committed and pushed.
 ## Key prompts (3–5)
 
 ### 1. Planning with my design decisions (plan mode)
@@ -41,10 +45,16 @@ Hard cap (4h): 24:00 PKT
 **Why:** The plan was mostly sound, but it would not fit in the time cap and it had two correctness gaps.
 **Result:** Updated `docs/PLAN.md`. When Claude Code reviewed it a second time, it found 4 more gaps (see below).
 
-### 3. <State machine TDD prompt — fill in when sent>
-**Prompt:**
-**Why:**
-**Result:**
+### 3. Phase 1: plan, then TDD implementation
+**Prompt (plan mode, after /clear):**
+> Plan Phase 1 of @docs/PLAN.md (order creation + state machine). List the files you'll create, the state machine test cases, the repository and service methods with their signatures, the integration test cases, and the commit sequence (failing tests first). POST /api/orders is out of scope; it moves to Phase 3. Flag any risks. Don't write code.
+
+**Prompt (implement, after approving the plan):**
+> Implement the approved Phase 1 plan following the execution protocol. TDD: run the failing state machine tests and commit them before implementing. Ask before each commit. When done, run typecheck, test:unit and test:integration, show me the output, and stop.
+
+**Why:** Phase 1 is the highest-priority part and the one where correctness matters most: idempotency, the state machine and the audit log. Planning it on its own let me check the P2002 handling, the transaction boundaries and the race test before any code existed. With TDD, the tests define how the state machine behaves before it's implemented, and committing the failing tests first shows that order in the git history. Leaving the route for Phase 3 meant I didn't need a temporary fake-auth stub.
+
+**Result:** The failing state machine tests were committed before the implementation. OrderRepository, OrderService and the creation integration test now all pass. In the repository, createIdempotent re-reads the existing order after the rollback on P2002, and the conditional transition writes its audit row in the same transaction. The integration test covers the same key sent twice, a Promise.all race, a different customer and a different payload. Phase 1 took about 18 minutes against the 40 planned.
 
 ### 4. <Worker claim / concurrency prompt — fill in when sent>
 **Prompt:**
