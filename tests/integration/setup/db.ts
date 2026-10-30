@@ -10,7 +10,9 @@ export async function resetDatabase(): Promise<void> {
   );
 }
 
-export async function createTestUser(role: Role = "CUSTOMER"): Promise<{ id: string }> {
+export async function createTestUser(
+  role: Role = "CUSTOMER",
+): Promise<{ id: string; email: string; role: Role }> {
   return prisma.user.create({
     data: {
       email: `${role.toLowerCase()}-${randomUUID()}@test.local`,
@@ -18,7 +20,7 @@ export async function createTestUser(role: Role = "CUSTOMER"): Promise<{ id: str
       passwordHash: "not-a-real-hash",
       role,
     },
-    select: { id: true },
+    select: { id: true, email: true, role: true },
   });
 }
 

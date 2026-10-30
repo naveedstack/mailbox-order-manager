@@ -32,6 +32,9 @@ Hard cap (4h): 24:00 PKT
 - 21:38: Ran started planning Phase 2 in plan mode.
 - 21:40: Reviewed and approved the Phase 2 plan. It covers the atomic claim, bounded concurrency, a guard for orders with zero mailboxes, and graceful shutdown.
 - 21:45: Finished Phase 2: a MailboxProvider strategy with mock Google and Microsoft providers, a provider registry, an atomic claimNextPending using `FOR UPDATE SKIP LOCKED`, ProvisioningService, a worker loop with graceful shutdown, and the claim concurrency integration test. Typecheck and tests pass. With two workers running in parallel, each processed a separate set of orders and none overlapped.
+- 21:52: Pushed Phase 2. Ran `/clear` and started planning Phase 3 in plan mode: auth, the admin list, retry, and the POST /api/orders route.
+- 21:55: Reviewed and approved the Phase 3 plan. Role checks live in the services, route handlers stay thin, the actor comes only from the session, and filters are validated with zod.
+- 22:07: Finished Phase 3: jose cookie sessions with bcryptjs, login and logout, an optimistic guard in proxy.ts, POST /api/orders, the admin list with status and provider filters and pagination, a retry route and button that resets failed mailboxes, and an order detail view with mailbox and audit log tables. Checked the error contract with curl: mailboxCount 51 returns 400 VALIDATION_ERROR, a customer retry returns 403, and retrying an ACTIVE order returns 409. Committed and pushed.
 ## Key prompts (3–5)
 
 ### 1. Planning with my design decisions (plan mode)
@@ -59,10 +62,16 @@ Hard cap (4h): 24:00 PKT
 
 **Result:** The failing state machine tests were committed before the implementation. OrderRepository, OrderService and the creation integration test now all pass. In the repository, createIdempotent re-reads the existing order after the rollback on P2002, and the conditional transition writes its audit row in the same transaction. The integration test covers the same key sent twice, a Promise.all race, a different customer and a different payload. Phase 1 took about 18 minutes against the 40 planned.
 
-### 4. <Worker claim / concurrency prompt — fill in when sent>
-**Prompt:**
-**Why:**
-**Result:**
+### 4. Phase 2: worker claim and provider abstraction
+**Prompt (plan mode, after /clear):**
+> Plan Phase 2 of @docs/PLAN.md (provider abstraction + worker). List the files you'll create, the MailboxProvider interface and mock config, the claimNextPending SQL (CTE first, with the interactive-transaction fallback), how ProvisioningService handles success, partial failure, zero mailboxes and unexpected errors, the worker loop with graceful shutdown, the test cases (claim concurrency integration test is MUST; mock provider unit tests with a seeded RNG if cheap), and the commit sequence. Flag any risks. Don't write code.
+
+**Prompt (implement):**
+> Implement the approved Phase 2 plan following the execution protocol. Ask before each commit. When done, run typecheck, test:unit and test:integration, show me the output, then start two workers (npm run worker) against a few seeded PENDING orders and show me that no order was processed twice. Stop after Phase 2.
+
+**Why:** The hardest correctness requirement is that "running the worker twice must never process the same order twice." So I had Claude Code plan the failure cases before writing any code: partial failure, zero mailboxes and crashes. I also wanted two kinds of proof that no order gets processed twice: an automated concurrency test and a real run with two workers.
+
+**Result:** The claim is atomic, uses SKIP LOCKED and writes an audit row. In the concurrency test, 20 parallel claims against 10 orders produce 10 distinct claims. The two live workers processed separate sets of orders with no overlap. Phase 2 took about 7 minutes against the 35 planned.
 
 ### 5. <Independent review prompt — fill in when sent>
 **Prompt:**
@@ -118,7 +127,7 @@ Hard cap (4h): 24:00 PKT
 | 0 Foundations | 20:38–20:53 (15m) | | | |
 | 1 Order creation + state machine | 20:53–21:33 (40m) | | | |
 | 2 Provider + worker | 21:55–22:30 (35m) |
-| 3 Auth + admin | 22:08–22:43 (35m) | | | |
+| 3 Auth + admin | 22:30–23:05 (35m) |
 | 4 Customer views | 22:43–22:58 (15m) | | | |
 | 5 Review + fixes | 22:58–23:08 (10m) | | | |
 | 6 Docs + video | 23:08–23:53 (45m) | | | |

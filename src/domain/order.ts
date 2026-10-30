@@ -1,4 +1,5 @@
-import type { OrderStatus, Provider } from "./types";
+import type { Mailbox } from "./mailbox";
+import type { ActorType, OrderStatus, Provider } from "./types";
 
 export type Order = {
   id: string;
@@ -26,3 +27,26 @@ export function isSameOrderRequest(order: OrderRequest, request: OrderRequest): 
     order.mailboxCount === request.mailboxCount
   );
 }
+
+export type OrderListItem = Order & { customerEmail: string };
+
+export type AuditEntry = {
+  id: string;
+  fromStatus: OrderStatus | null;
+  toStatus: OrderStatus;
+  actorType: ActorType;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  reason: string | null;
+  createdAt: Date;
+};
+
+export type OrderDetails = OrderListItem & { mailboxes: Mailbox[]; auditLog: AuditEntry[] };
+
+export type OrderPage = {
+  items: OrderListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+};

@@ -2,8 +2,8 @@
 // out; Prisma types and error codes never leave this file.
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type * as db from "@/generated/prisma/enums";
-import type { Order } from "@/domain/order";
-import type { ActorType, MailboxStatus, OrderStatus, Provider } from "@/domain/types";
+import type { AuditEntry, Order, OrderDetails, OrderListItem } from "@/domain/order";
+import type { ActorType, MailboxStatus, OrderStatus, Provider, Role } from "@/domain/types";
 
 // Compile-time guard: the domain unions must match the generated Prisma enums.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -13,6 +13,7 @@ export type DomainEnumsMatchPrisma = [
   Assert<Same<MailboxStatus, db.MailboxStatus>>,
   Assert<Same<Provider, db.Provider>>,
   Assert<Same<ActorType, db.ActorType>>,
+  Assert<Same<Role, db.Role>>,
 ];
 
 export type NewOrder = {
@@ -37,11 +38,24 @@ export type TransitionEffects = {
   resetFailedMailboxes?: boolean;
 };
 
+export type OrderListFilter = {
+  customerId?: string;
+  status?: OrderStatus;
+  provider?: Provider;
+};
+
 export interface OrderRepository {
   // Creates order + mailboxes + the creation audit row atomically. If the
   // (customerId, idempotencyKey) pair already exists, returns that order instead.
   createIdempotent(data: NewOrder, audit: AuditInput): Promise<{ order: Order; created: boolean }>;
   findById(id: string): Promise<Order | null>;
+  // Newest first; `total` counts all matches, for pagination.
+  list(
+    filter: OrderListFilter,
+    page: { page: number; pageSize: number },
+  ): Promise<{ items: OrderListItem[]; total: number }>;
+  // Order + customer email + mailboxes (by address) + audit log (oldest first).
+  findDetailsById(id: string): Promise<OrderDetails | null>;
   // Conditional update: only applies if the order is still in `expectedFrom`.
   // Returns null (and writes nothing) if it isn't. Validation of the move itself
   // is the caller's job (OrderService.transition).
@@ -112,6 +126,52 @@ export function createOrderRepository(db: PrismaClient): OrderRepository {
 
     findById(id) {
       return db.order.findUnique({ where: { id } });
+    },
+
+    async list(filter, { page, pageSize }) {
+      // Undefined keys are ignored by Prisma, so absent filters match everything.
+      const where = {
+        customerId: filter.customerId,
+        status: filter.status,
+        provider: filter.provider,
+      };
+      const [rows, total] = await db.$transaction([
+        db.order.findMany({
+          where,
+          // id breaks ties so pages never overlap or skip rows.
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          include: { customer: { select: { email: true } } },
+        }),
+        db.order.count({ where }),
+      ]);
+      const items = rows.map(({ customer, ...order }) => ({
+        ...order,
+        customerEmail: customer.email,
+      }));
+      return { items, total };
+    },
+
+    async findDetailsById(id) {
+      const row = await db.order.findUnique({
+        where: { id },
+        include: {
+          customer: { select: { email: true } },
+          mailboxes: { orderBy: { address: "asc" } },
+          auditLogs: {
+            orderBy: { createdAt: "asc" },
+            include: { actorUser: { select: { email: true } } },
+          },
+        },
+      });
+      if (!row) return null;
+      const { customer, mailboxes, auditLogs, ...order } = row;
+      const auditLog: AuditEntry[] = auditLogs.map(({ actorUser, ...entry }) => ({
+        ...entry,
+        actorEmail: actorUser?.email ?? null,
+      }));
+      return { ...order, customerEmail: customer.email, mailboxes, auditLog };
     },
 
     transition(id, expectedFrom, to, audit, effects = {}) {

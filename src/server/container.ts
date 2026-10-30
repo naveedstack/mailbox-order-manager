@@ -7,6 +7,8 @@ import { MockMicrosoftProvider } from "@/providers/mock-microsoft-provider";
 import { createProviderRegistry } from "@/providers/mailbox-provider";
 import { createMailboxRepository } from "@/repositories/mailbox-repository";
 import { createOrderRepository } from "@/repositories/order-repository";
+import { createUserRepository } from "@/repositories/user-repository";
+import { createAuthService } from "@/services/auth-service";
 import { createOrderService } from "@/services/order-service";
 import { createProvisioningService } from "@/services/provisioning-service";
 import { providerConfig } from "./config";
@@ -14,8 +16,10 @@ import { prisma } from "./db";
 
 export const orderRepository = createOrderRepository(prisma);
 export const mailboxRepository = createMailboxRepository(prisma);
+export const userRepository = createUserRepository(prisma);
 
 export const orderService = createOrderService({ orders: orderRepository });
+export const authService = createAuthService({ users: userRepository });
 
 export const providerRegistry = createProviderRegistry([
   new MockGoogleProvider(providerConfig),
