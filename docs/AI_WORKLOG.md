@@ -29,6 +29,9 @@ Hard cap (4h): 24:00 PKT
 - 21:18: Worked out the Phase 1 plan in plan mode. It covers the files, the test cases, the repository and service signatures, and the commit order. I reviewed the plan and approved it.
 - 21:26: Started implementing Phase 1 with TDD, committing the failing tests first.
 - 21:34: Finished Phase 1: the state machine, OrderRepository (createIdempotent and transition), OrderService (createOrder and transition) and the creation integration test. Typecheck, unit and integration tests pass. Committed and pushed.
+- 21:38: Ran started planning Phase 2 in plan mode.
+- 21:40: Reviewed and approved the Phase 2 plan. It covers the atomic claim, bounded concurrency, a guard for orders with zero mailboxes, and graceful shutdown.
+- 21:45: Finished Phase 2: a MailboxProvider strategy with mock Google and Microsoft providers, a provider registry, an atomic claimNextPending using `FOR UPDATE SKIP LOCKED`, ProvisioningService, a worker loop with graceful shutdown, and the claim concurrency integration test. Typecheck and tests pass. With two workers running in parallel, each processed a separate set of orders and none overlapped.
 ## Key prompts (3–5)
 
 ### 1. Planning with my design decisions (plan mode)
@@ -114,7 +117,7 @@ Hard cap (4h): 24:00 PKT
 | Planning + plan review | 20:12–20:38 | 20:12 | 20:38 | 26 |
 | 0 Foundations | 20:38–20:53 (15m) | | | |
 | 1 Order creation + state machine | 20:53–21:33 (40m) | | | |
-| 2 Provider + worker | 21:33–22:08 (35m) | | | |
+| 2 Provider + worker | 21:55–22:30 (35m) |
 | 3 Auth + admin | 22:08–22:43 (35m) | | | |
 | 4 Customer views | 22:43–22:58 (15m) | | | |
 | 5 Review + fixes | 22:58–23:08 (10m) | | | |

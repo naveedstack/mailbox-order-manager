@@ -30,6 +30,9 @@ export async function insertOrder(options: {
   mailboxes?: MailboxStatus[];
   domain?: string;
   provider?: Provider;
+  // Defaults to mailboxes.length; override to create an inconsistent order.
+  mailboxCount?: number;
+  createdAt?: Date;
 }): Promise<{ id: string }> {
   const domain = options.domain ?? "example.com";
   const mailboxes = options.mailboxes ?? ["PENDING"];
@@ -39,8 +42,9 @@ export async function insertOrder(options: {
       idempotencyKey: randomUUID(),
       domain,
       provider: options.provider ?? "GOOGLE",
-      mailboxCount: mailboxes.length,
+      mailboxCount: options.mailboxCount ?? mailboxes.length,
       status: options.status,
+      createdAt: options.createdAt,
       mailboxes: {
         create: mailboxes.map((status, i) => ({
           address: `mailbox-${String(i + 1).padStart(2, "0")}@${domain}`,

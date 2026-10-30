@@ -52,6 +52,10 @@ export interface OrderRepository {
     audit: AuditInput,
     effects?: TransitionEffects,
   ): Promise<Order | null>;
+  // Atomically moves the oldest PENDING order to PROVISIONING and writes its
+  // audit row. Concurrent callers never get the same order. The one status
+  // change that bypasses OrderService.transition() (see CLAUDE.md).
+  claimNextPending(): Promise<Order | null>;
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -143,6 +147,57 @@ export function createOrderRepository(db: PrismaClient): OrderRepository {
 
         return tx.order.findUniqueOrThrow({ where: { id } });
       });
+    },
+
+    async claimNextPending() {
+      // One statement, so one implicit transaction:
+      // - FOR UPDATE SKIP LOCKED: concurrent claimers skip rows another claimer
+      //   holds; a row claimed (committed) after our snapshot is re-checked
+      //   against status = 'PENDING' and skipped.
+      // - Raw SQL bypasses Prisma's client-side defaults: ids come from
+      //   gen_random_uuid() and updated_at is set explicitly.
+      // - Enum literals are cast: in INSERT ... SELECT an untyped literal is text.
+      // - Data-modifying CTEs always run to completion, so the audit row is
+      //   written even though the final SELECT doesn't read it.
+      // - Columns are aliased to the domain Order shape.
+      const rows = await db.$queryRaw<Order[]>`
+        WITH next AS (
+          SELECT id FROM orders
+          WHERE status = 'PENDING'::"OrderStatus"
+          ORDER BY created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
+        ), claimed AS (
+          UPDATE orders o
+          SET status = 'PROVISIONING'::"OrderStatus",
+              claimed_at = now(),
+              updated_at = now(),
+              attempts = o.attempts + 1
+          FROM next
+          WHERE o.id = next.id AND o.status = 'PENDING'::"OrderStatus"
+          RETURNING o.*
+        ), audit AS (
+          INSERT INTO order_audit_logs
+            (id, order_id, from_status, to_status, actor_type, reason, created_at)
+          SELECT gen_random_uuid(), claimed.id, 'PENDING'::"OrderStatus",
+                 'PROVISIONING'::"OrderStatus", 'SYSTEM'::"ActorType", 'Claimed by worker', now()
+          FROM claimed
+        )
+        SELECT id,
+               customer_id     AS "customerId",
+               idempotency_key AS "idempotencyKey",
+               domain,
+               provider,
+               mailbox_count   AS "mailboxCount",
+               status,
+               attempts,
+               last_error      AS "lastError",
+               claimed_at      AS "claimedAt",
+               created_at      AS "createdAt",
+               updated_at      AS "updatedAt"
+        FROM claimed
+      `;
+      return rows[0] ?? null;
     },
   };
 }
