@@ -35,6 +35,8 @@ Hard cap (4h): 24:00 PKT
 - 21:52: Pushed Phase 2. Ran `/clear` and started planning Phase 3 in plan mode: auth, the admin list, retry, and the POST /api/orders route.
 - 21:55: Reviewed and approved the Phase 3 plan. Role checks live in the services, route handlers stay thin, the actor comes only from the session, and filters are validated with zod.
 - 22:07: Finished Phase 3: jose cookie sessions with bcryptjs, login and logout, an optimistic guard in proxy.ts, POST /api/orders, the admin list with status and provider filters and pagination, a retry route and button that resets failed mailboxes, and an order detail view with mailbox and audit log tables. Checked the error contract with curl: mailboxCount 51 returns 400 VALIDATION_ERROR, a customer retry returns 403, and retrying an ACTIVE order returns 409. Committed and pushed.
+- 22:08: Reviewed and approved the Phase 4 plan. The idempotency key is generated once when the form mounts, ownership is enforced in the service, and the page auto-refreshes only while the order is in progress.
+- 22:16: Finished Phase 4: the customer order list, a create form, and a customer detail page that reuses the mailbox and audit log components. The form generates the idempotency key on the client, validates with zod, shows API errors inline and redirects to the detail page. The detail page auto-refreshes while the order is PENDING or PROVISIONING. Committed and pushed.
 ## Key prompts (3–5)
 
 ### 1. Planning with my design decisions (plan mode)
@@ -128,8 +130,7 @@ Hard cap (4h): 24:00 PKT
 | 1 Order creation + state machine | 20:53–21:33 (40m) | | | |
 | 2 Provider + worker | 21:55–22:30 (35m) |
 | 3 Auth + admin | 22:30–23:05 (35m) |
-| 4 Customer views | 22:43–22:58 (15m) | | | |
-| 5 Review + fixes | 22:58–23:08 (10m) | | | |
+| 4 Customer views | 23:05–23:15 (10m) | 22:07 |
 | 6 Docs + video | 23:08–23:53 (45m) | | | |
 | Buffer | 23:53–24:00 (7m) | | | |
 | **Total** | **4h 00m** | | | |

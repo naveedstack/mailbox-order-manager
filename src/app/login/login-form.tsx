@@ -2,9 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-
-const inputClass =
-  "h-9 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
+import { Input } from "@/components/ui/input";
 
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
@@ -35,11 +33,11 @@ export function LoginForm({ next }: { next: string }) {
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         Email
-        <input name="email" type="email" autoComplete="username" required className={inputClass} />
+        <Input name="email" type="email" autoComplete="username" required />
       </label>
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         Password
-        <input name="password" type="password" autoComplete="current-password" required className={inputClass} />
+        <Input name="password" type="password" autoComplete="current-password" required />
       </label>
       {error && (
         <p role="alert" className="text-sm text-destructive">

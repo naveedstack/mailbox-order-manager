@@ -207,7 +207,7 @@ Integration `globalSetup`: `CREATE DATABASE mailbox_orders_test` if missing → 
   2. Show `git diff --staged --stat` and the proposed commit message.
   3. Ask "Commit?" and wait for a yes.
   4. If the answer is no or comes with changes, adjust and ask again.
-- The current approval covers **Phase 3 only** (Phases 0–2 are done).
+- The current approval covers **Phase 4 only** (Phases 0–3 are done).
 
 ### Phase 0 kickoff (git init and the scaffold commit are already done by the user)
 1. Check `git status` and `git ls-files`. Make sure `.env`, `node_modules`, `src/generated` and the task PDF are **not** tracked. If any are, fix `.gitignore`, `git rm --cached` them, then ask before committing `chore: fix gitignore`.
